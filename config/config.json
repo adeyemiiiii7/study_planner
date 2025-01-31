@@ -1,0 +1,24 @@
+{
+    "development": {
+      "username": "adeyemi_user",
+      "password": "adeyemi05$",
+      "database": "study_planner",
+      "host": "localhost",
+      "dialect": "postgres"
+    },
+    "test": {
+      "username": "adeyemi_user",
+      "password": "adeyemi05$",
+      "database": "study_planner",
+      "host": "127.0.0.1",
+      "dialect": "postgres"
+    },
+    "production": {
+      "username": "adeyemi_user",
+      "password": "adeyemi05$",
+      "database": "study_planner",
+      "host": "127.0.0.1",
+      "dialect": "postgres"
+    }
+  }
+  
