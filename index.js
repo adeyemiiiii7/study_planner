@@ -2,15 +2,16 @@ const express = require('express');
 const morgan = require('morgan');
 const cors = require('cors');
 const sequelize = require('./config/database');
+const authRouter = require('./routes/auth');
+const courseRepRouter = require('./routes/course_representative');
 const app = express();
 app.use(express.json());
-const auth = require('./routes/auth');
-const authRouter = require('./routes/auth');
-
 // Middleware
 app.use(cors());
 app.use(morgan('dev'));
 app.use(authRouter);
+app.use(courseRepRouter);
+
 
 
 sequelize
