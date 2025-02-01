@@ -19,7 +19,7 @@ const Classroom = sequelize.define('Classroom', {
     type: DataTypes.STRING,
     allowNull: false,
   },
-  course_of_study: {  // Changed from course_name to match your routes
+  course_of_study: { 
     type: DataTypes.STRING,
     allowNull: false,
   },
