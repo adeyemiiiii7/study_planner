@@ -35,8 +35,6 @@ authRouter.post('/api/users/signup', async (req, res) => {
         if (existingUser) {
             return res.status(400).json({ error: 'Email already exists' });
         }
-
-        // Validate level
         const parsedLevel = parseInt(level, 10);
         if (isNaN(parsedLevel) || parsedLevel < 100 || parsedLevel > 600) {
             return res.status(400).json({ error: 'Invalid level. Must be an integer between 100 and 600.' });
@@ -44,7 +42,7 @@ authRouter.post('/api/users/signup', async (req, res) => {
 
         // Generate verification code
         const verificationCode = Math.floor(10000 + Math.random() * 90000).toString();
-        const verificationExpiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+        const verificationExpiry = new Date(Date.now() + 30 * 60 * 1000); 
 
         // Hash the password
         const hashedPassword = await bcryptjs.hash(password, 10);
