@@ -72,6 +72,49 @@ const User = sequelize.define('User', {
         allowNull: false,
         defaultValue: 0,
     },
+    xp: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0,
+      },
+      daily_quest_status: {
+        type: DataTypes.JSONB,
+        defaultValue: {
+          completedDailyStudySession: false,
+          personalQuests: {}
+        },
+      },
+      personal_quests: {
+        type: DataTypes.ARRAY(DataTypes.STRING),
+        defaultValue: [],
+        allowNull: false,
+      },
+      last_quest_reset: {
+        type: DataTypes.DATEONLY,
+        allowNull: true
+      }, 
+      focus_mode_data: {
+        type: DataTypes.JSONB,
+        defaultValue: {
+          lastSessionStart: null,      
+          duration: null,             
+          isActive: false,           
+          stressLevel: null,         
+          workType: null,              
+          cooldownEnd: null,         
+          sessionHistory: []          
+        },
+        allowNull: false
+      },
+    
+      study_smart_data: {
+        type: DataTypes.JSONB,
+        defaultValue: {
+          lastCheckIn: null,
+          feedback: null,
+          answers: null
+        },
+        allowNull: false
+      }
 }, {
     tableName: 'Users',
     timestamps: true,

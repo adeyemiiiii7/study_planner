@@ -16,6 +16,309 @@ const CourseMaterial = require('../models/courseMaterial');
 const PastQuestion = require('../models/pastQuestion');
 const Announcement = require('../models/annocements');
 const { fetchLeaderboard } = require('../utils/fetchLeaderboard');
+const { Groq } = require('groq-sdk'); 
+const Question = require('../models/question');
+require('dotenv').config();
+
+const groq = new Groq({
+    apiKey: process.env.GROQ_API_KEY
+  });
+  async function generateQuestionsWithGroq(materialContent, materialNumber) {
+    const prompt = `IMPORTANT: Provide ONLY a valid JSON array. Do not include any explanatory text before or after.
+  
+  Generate 25 multiple choice questions based on the following structured slide content.
+  Ensure questions cover different aspects and difficulty levels.
+  
+  Main Concepts: ${materialContent.split('Main Concepts:')[1]?.split('Key Definitions:')[0] || ''}
+  Key Definitions: ${materialContent.split('Key Definitions:')[1]?.split('Examples:')[0] || ''}
+  Examples: ${materialContent.split('Examples:')[1]?.split('Additional Notes:')[0] || ''}
+  Additional Notes: ${materialContent.split('Additional Notes:')[1] || ''}
+  
+  Generate questions in this EXACT JSON format:
+  [
+    {
+      "question_text": "Precise question about the content",
+      "options": ["option A", "option B", "option C", "option D"],
+      "correct_answer": 0,
+      "question_type": "definition",
+      "difficulty_level": "medium"
+    }
+  ]
+  
+  Slide ${materialNumber} content: ${materialContent}
+  
+  JSON ARRAY:`;
+  
+    let response;
+    try {
+      response = await groq.chat.completions.create({
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.7,
+        max_tokens: 3000
+      });
+  
+      const responseText = response.choices[0]?.message?.content?.trim();
+      
+      if (!responseText) {
+        throw new Error('Empty response from Groq API');
+      }
+  
+      const jsonMatch = responseText.match(/\[.*\]/s);
+      
+      if (!jsonMatch) {
+        throw new Error('No valid JSON array found in response');
+      }
+  
+      const questions = JSON.parse(jsonMatch[0]);
+      return questions.map(q => ({
+        ...q,
+        material_number: materialNumber
+      }));
+  
+    } catch (error) {
+      console.error('Detailed error generating questions:', {
+        message: error.message,
+        responseText: response?.choices?.[0]?.message?.content || 'No response available',
+        error: error.stack
+      });
+      
+      // Re-throw with more context
+      throw new Error(`Failed to generate questions: ${error.message}`);
+    }
+  }
+  // Get questions endpoint with slide-specific filtering and improved error handling
+courseRepRouter.get('/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/slides/:slideId/questions',
+    auth,
+    authorizeRole(['course_rep']),
+    async (req, res) => {
+      try {
+        const { classroomId, courseSectionId, slideId } = req.params;
+  
+        // Validate slide existence first
+        const courseMaterial = await CourseMaterial.findOne({
+          where: {
+            material_id:  materialId,
+            course_section_id: courseSectionId,
+            classroom_id: classroomId
+          }
+        });
+  
+        if (!courseMaterial) {
+          return res.status(404).json({ 
+            error: 'Course Material not found or unauthorized access',
+            questions: [] 
+          });
+        }
+  
+        // Fetch questions for the specific slide
+        const questions = await Question.findAll({
+          where: {
+            material_id:  materialId,
+            course_section_id: courseSectionId,
+            classroom_id: classroomId
+          },
+          order: [['material_number', 'ASC']],
+          attributes: [
+            'question_id', 
+            'question_text', 
+            'options', 
+            'correct_answer', 
+            'question_type', 
+            'difficulty_level',
+            'material_number'
+          ]
+        });
+  
+        res.status(200).json({
+          message: 'Questions retrieved successfully',
+          questions: questions.length > 0 ? questions : [],
+          courseMaterial: {
+            material_id:  materialId,
+            material_name: courseMaterial.material_name,
+            material_number: courseMaterial.material_number
+          }
+        });
+      } catch (error) {
+        console.error('Error fetching questions:', error);
+        res.status(500).json({ 
+          error: 'Failed to fetch questions',
+          questions: []
+        });
+      }
+  });
+  
+  // Updated generate questions endpoint with more robust error handling
+  courseRepRouter.post('/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/slides/:slideId/generate-questions',
+    auth,
+    authorizeRole(['course_rep']),
+    async (req, res) => {
+      const transaction = await sequelize.transaction();
+      try {
+        const { classroomId, courseSectionId, materialId} = req.params;
+        const {materialContent, materialNumber } = req.body;
+        
+        // Validate inputs
+        if (!slideContent) {
+          return res.status(400).json({ 
+            error: 'Slide content is required for generating questions',
+            questions: []
+          });
+        }
+  
+        // Validate slide existence and ownership
+        const courseMaterial = await CourseMaterial.findOne({
+          where: {
+            material_id: materialId,
+            course_section_id: courseSectionId,
+            classroom_id: classroomId
+          },
+          transaction
+        });
+  
+        if (!courseMaterial) {
+          await transaction.rollback();
+          return res.status(404).json({ 
+            error: 'Course Material not found or unauthorized access',
+            questions: []
+          });
+        }
+  
+        // First, delete any existing questions for this slide
+        await Question.destroy({
+          where: {
+            material_id: materialId,
+            course_section_id: courseSectionId,
+            classroom_id: classroomId
+          },
+          transaction
+        });
+  
+        // Generate new questions
+        const generatedQuestions = await generateQuestionsWithGroq(slideContent, slideNumber);
+        
+        // Save generated questions
+        const savedQuestions = await Promise.all(
+          generatedQuestions.map(q => Question.create({
+            ...q,
+            material_id: courseMaterial.material_id,
+            course_section_id: courseSectionId,
+            classroom_id: classroomId
+          }, { transaction }))
+        );
+  
+        // Commit transaction
+        await transaction.commit();
+  
+        res.status(200).json({
+          message: 'Questions generated successfully',
+          questions: savedQuestions,
+          courseMaterial: {
+            material_id: courseMaterial.material_id,
+            material_name: courseMaterial.slide_name,
+            material_number: courseMaterial.slide_number
+          }
+        });
+  
+      } catch (error) {
+        // Rollback transaction in case of error
+        if (transaction) await transaction.rollback();
+        
+        console.error('Error generating questions:', error);
+        res.status(500).json({ 
+          error: 'Failed to generate questions',
+          details: error.message,
+          questions: []
+        });
+      }
+  });
+  
+  // Edit question endpoint with additional validation
+  courseRepRouter.put('/api/course-rep/classrooms/:classroomId/questions/:questionId',
+    auth,
+    authorizeRole(['course_rep']),
+    async (req, res) => {
+      try {
+        const { classroomId } = req.params;
+        const {
+          question_text,
+          options,
+          correct_answer,
+          question_type,
+          difficulty_level,
+          status,
+          feedback
+        } = req.body;
+  
+        const question = await Question.findOne({
+          where: {
+            question_id: req.params.questionId,
+            classroom_id: classroomId
+          },
+          include: [{
+            model: CourseMaterial,
+            where: { classroom_id: classroomId }
+          }]
+        });
+  
+        if (!question) {
+          return res.status(404).json({ error: 'Question not found or unauthorized access' });
+        }
+  
+        await question.update({
+          question_text: question_text || question.question_text,
+          options: options || question.options,
+          correct_answer: (correct_answer !== undefined) ? correct_answer : question.correct_answer,
+          question_type: question_type || question.question_type,
+          difficulty_level: difficulty_level || question.difficulty_level,
+          status: status || question.status,
+          feedback: feedback || question.feedback
+        });
+  
+        res.status(200).json({
+          message: 'Question updated successfully',
+          question
+        });
+  
+      } catch (error) {
+        console.error('Error updating question:', error);
+        res.status(500).json({ error: 'Failed to update question' });
+      }
+  });
+  
+  // Delete question endpoint with classroom validation
+  courseRepRouter.delete('/api/course-rep/classrooms/:classroomId/questions/:questionId',
+    auth,
+    authorizeRole(['course_rep']),
+    async (req, res) => {
+      try {
+        const { classroomId } = req.params;
+  
+        const question = await Question.findOne({
+          where: {
+            question_id: req.params.questionId,
+            classroom_id: classroomId
+          }
+        });
+  
+        if (!question) {
+          return res.status(404).json({ error: 'Question not found or unauthorized access' });
+        }
+  
+        await question.destroy();
+        res.status(200).json({
+          message: 'Question deleted successfully'
+        });
+  
+      } catch (error) {
+        res.status(500).json({ error: 'Failed to delete question' });
+      }
+  });
 // Route for creating a classroom
 courseRepRouter.post('/api/course-rep/classrooms/create', auth, authorizeRole(['course_rep']), async (req, res) => {
     const { name, level, department, session, course_of_study } = req.body;
@@ -195,12 +498,13 @@ courseRepRouter.post('/api/course-rep/classrooms/create', auth, authorizeRole(['
       }
   });
   // Route for creating a course section inside a classroom
-courseRepRouter.post('/api/course-rep/classrooms/:classroomId/course-sections/create',
+  courseRepRouter.post('/api/course-rep/classrooms/:classroomId/course-sections/create',
     auth, authorizeRole(['course_rep']), async (req, res) => {
    const { classroomId } = req.params;
    const { courseTitle, courseCode } = req.body;
  
    try {
+     // First check if the classroom exists and belongs to the course rep
      const classroom = await Classroom.findOne({
        where: {
          classroom_id: classroomId,
@@ -211,21 +515,41 @@ courseRepRouter.post('/api/course-rep/classrooms/:classroomId/course-sections/cr
      if (!classroom) {
        return res.status(404).json({ error: 'Classroom not found or you are not the course rep' });
      }
+
+     // Check for existing course section with the same title and code
+     const existingSection = await CourseSection.findOne({
+       where: {
+         classroom_id: classroomId,
+         course_title: courseTitle,
+         course_code: courseCode
+       }
+     });
+
+     if (existingSection) {
+       return res.status(409).json({ 
+         error: 'A course section with this title and code already exists in this classroom' 
+       });
+     }
+
+     // Create the new section if no duplicate exists
      const section = await CourseSection.create({
        course_title: courseTitle,
        course_code: courseCode,
        classroom_id: classroomId,
      });
+
      res.status(200).json({
        message: 'Section created successfully',
        section,
      });
    } catch (error) {
      console.error('Error Creating Section:', error);
-     res.status(500).json({ error: 'An error occurred while creating the section' });
+     res.status(500).json({ 
+       error: 'An error occurred while creating the section',
+       details: error.message 
+     });
    }
- });
-
+});
  //route to delete a course section
  courseRepRouter.delete('/api/course-rep/classrooms/:classroomId/course-sections/:sectionId', 
     auth, 
