@@ -26,10 +26,17 @@ class StudentService {
     const preferences = await UserStudyPreference.findOne({
       where: { user_id: userId }
     });
-
+   // If no preferences exist, return null to indicate preferences need to be set
+   if (!preferences) {
+    return null;
+  }
     const courses = await UserCourse.findAll({
       where: { user_id: userId }
     });
+ // Return empty schedule if no courses found
+ if (!courses || courses.length === 0) {
+  return {};
+}
 
     // Time slots configuration with preferred mapping
     const timeSlots = {
