@@ -595,11 +595,130 @@ studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/past
         res.status(500).json({ error: 'Failed to fetch study preferences' });
       }
   });
-  
+  // Edit specific day preferences
+studentRouter.patch('/api/student/study/preferences/:day',
+  auth,
+  authorizeRole(['student', 'course_rep']),
+  async (req, res) => {
+    try {
+      // Check if there's an existing schedule
+      const hasSchedule = await StudentService.checkExistingSchedule(req.user.user_id);
+      if (hasSchedule) {
+        return res.status(400).json({
+          error: 'Cannot modify preferences while a study schedule exists. Please delete the current schedule first.'
+        });
+      }
 
-  
-  
-  
+      const { day } = req.params;
+      const { slots } = req.body;
+
+      // Validate day
+      const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+      if (!validDays.includes(day)) {
+        return res.status(400).json({ error: 'Invalid day provided' });
+      }
+
+      // Validate slots
+      const validSlots = ['morning', 'afternoon', 'evening'];
+      if (!Array.isArray(slots) || !slots.every(slot => validSlots.includes(slot))) {
+        return res.status(400).json({ error: 'Invalid time slots provided' });
+      }
+
+      // Get current preferences
+      let userPreferences = await UserStudyPreference.findOne({
+        where: { user_id: req.user.user_id }
+      });
+
+      if (!userPreferences) {
+        // Create new preferences if none exist
+        const defaultPreferences = validDays.reduce((acc, d) => {
+          acc[d] = [];
+          return acc;
+        }, {});
+
+        userPreferences = await UserStudyPreference.create({
+          user_id: req.user.user_id,
+          daily_preferences: defaultPreferences
+        });
+      }
+
+      // Update specific day's preferences
+      const updatedPreferences = {
+        ...userPreferences.daily_preferences,
+        [day]: slots
+      };
+
+      await userPreferences.update({
+        daily_preferences: updatedPreferences
+      });
+
+      res.status(200).json({
+        message: 'Study preferences updated successfully',
+        preferences: updatedPreferences
+      });
+    } catch (error) {
+      console.error('Error updating preferences:', error);
+      res.status(500).json({
+        error: 'Failed to update study preferences',
+        details: error.message
+      });
+    }
+  }
+);
+
+// Delete specific day preferences
+studentRouter.delete('/api/student/study/preferences/:day',
+  auth,
+  authorizeRole(['student', 'course_rep']),
+  async (req, res) => {
+    try {
+      // Check if there's an existing schedule
+      const hasSchedule = await StudentService.checkExistingSchedule(req.user.user_id);
+      if (hasSchedule) {
+        return res.status(400).json({
+          error: 'Cannot modify preferences while a study schedule exists. Please delete the current schedule first.'
+        });
+      }
+
+      const { day } = req.params;
+      
+      // Validate day
+      const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+      if (!validDays.includes(day)) {
+        return res.status(400).json({ error: 'Invalid day provided' });
+      }
+
+      const userPreferences = await UserStudyPreference.findOne({
+        where: { user_id: req.user.user_id }
+      });
+
+      if (!userPreferences) {
+        return res.status(404).json({ error: 'No preferences found' });
+      }
+
+      // Clear the specific day's preferences
+      const updatedPreferences = {
+        ...userPreferences.daily_preferences,
+        [day]: []
+      };
+
+      await userPreferences.update({
+        daily_preferences: updatedPreferences
+      });
+
+      res.status(200).json({
+        message: 'Study preferences for day removed successfully',
+        preferences: updatedPreferences
+      });
+    } catch (error) {
+      console.error('Error removing day preferences:', error);
+      res.status(500).json({
+        error: 'Failed to remove study preferences',
+        details: error.message
+      });
+    }
+  }
+);
   // Add courses for study schedule
   studentRouter.post('/api/student/study/courses',
     auth,
@@ -654,8 +773,8 @@ studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/past
       const tomorrowDay = tomorrow.toLocaleString('en-us', { weekday: 'long' });
       
       if (schedule[tomorrowDay]) {
-        const formattedSessions = formatScheduleForEmail(schedule[tomorrowDay]);
-        await sendScheduleEmail(
+        const formattedSessions = StudentService.formatScheduleForEmail(schedule[tomorrowDay]);
+        await StudentService.sendScheduleEmail(
           req.user.email,
           req.user.first_name,
           tomorrowDay,
@@ -694,35 +813,137 @@ studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/past
         res.status(500).json({ error: 'Failed to fetch study schedule' });
       }
   });
-  // Get current study schedule with detailed information
-
   studentRouter.get('/api/student/study/schedule/detailed',
     auth,
     authorizeRole(['student', 'course_rep']),
     async (req, res) => {
       try {
+          // First check if user has study preferences
+      const preferences = await UserStudyPreference.findOne({
+        where: { user_id: req.user.user_id }
+      });
+
+      if (!preferences) {
+        return res.status(200).json({
+          has_schedule: false,
+          message: 'Study preferences not found. Please set up your study preferences first.',
+          summary: {
+            total_courses: 0,
+            total_units: 0,
+            schedule_status: {
+              is_complete: false,
+              unscheduled_courses: [],
+              partially_scheduled: [],
+              recommendations: [
+                'Create your study preferences to generate a personalized schedule.',
+                'Specify your preferred study times for each day of the week.',
+                'Include any specific time constraints or preferences you may have.'
+              ]
+            }
+          },
+          schedule: {},
+          analysis: {
+            complete: false,
+            recommendations: [
+              'Visit the preferences section to set up your study schedule.',
+              'Consider your most productive hours when setting preferences.',
+              'Think about your other commitments when choosing study times.'
+            ]
+          }
+        });
+      }
+
         const schedule = await StudentService.generateSchedule(req.user.user_id);
-        
-        if (!schedule || Object.keys(schedule).length === 0) {
-          return res.status(404).json({
-            message: 'No study schedule found'
-          });
-        }
-  
         const courses = await UserCourse.findAll({
           where: { user_id: req.user.user_id }
         });
-  
         const totalUnits = courses.reduce((sum, course) => sum + course.course_units, 0);
         const courseCount = courses.length;
   
-        // Get schedule analysis
+        // Case 1: No schedule found
+        if (!schedule || Object.keys(schedule).length === 0) {
+          return res.status(200).json({
+            has_schedule: false,
+            message: 'No study schedule found, but here are your course details',
+            summary: {
+              total_courses: courseCount,
+              total_units: totalUnits,
+              courses: courses.map(c => ({
+                code: c.course_code,
+                units: c.course_units
+              })),
+              schedule_status: {
+                is_complete: false,
+                unscheduled_courses: courses.map(c => c.course_code),
+                partially_scheduled: [],
+                recommendations: ['Please create a study schedule to organize your courses.']
+              }
+            },
+            schedule: {},
+            analysis: {
+              complete: false,
+              unscheduled_courses: courses.map(c => c.course_code),
+              partially_scheduled: [],
+              recommendations: ['Please create a study schedule to organize your courses.']
+            }
+          });
+        }
+  
+        // Analyze schedule completeness
         const scheduleAnalysis = await StudentService.analyzeScheduleCompleteness(
           req.user.user_id,
           schedule,
           courses
         );
   
+        // Case 2: Schedule exists and is complete
+        if (scheduleAnalysis.complete) {
+          const scheduleSummary = {
+            total_courses: courseCount,
+            total_units: totalUnits,
+            schedule_days: Object.keys(schedule).length,
+            courses: courses.map(c => ({
+              code: c.course_code,
+              units: c.course_units,
+              scheduled_hours: schedule[c.course_code]?.total_hours || 0,
+              distribution: schedule[c.course_code]?.distribution || []
+            })),
+            schedule_status: {
+              is_complete: true,
+              unscheduled_courses: [],
+              partially_scheduled: [],
+              recommendations: [
+                'All courses have been successfully scheduled',
+                'Consider reviewing the schedule periodically for optimization',
+                'Track your adherence to the schedule for better results'
+              ]
+            }
+          };
+  
+          return res.status(200).json({
+            has_schedule: true,
+            message: 'Complete study schedule retrieved successfully',
+            summary: scheduleSummary,
+            schedule,
+            analysis: {
+              complete: true,
+              unscheduled_courses: [],
+              partially_scheduled: [],
+              schedule_efficiency: {
+                total_study_hours: Object.values(schedule).reduce((sum, course) => sum + course.total_hours, 0),
+                daily_distribution: scheduleAnalysis.daily_distribution || {},
+                peak_study_times: scheduleAnalysis.peak_study_times || []
+              },
+              recommendations: [
+                'Schedule is well-balanced across all courses',
+                'Maintain consistent study hours as planned',
+                'Use peak study times effectively'
+              ]
+            }
+          });
+        }
+  
+        // Case 3: Schedule exists but is partially complete
         const scheduleSummary = {
           total_courses: courseCount,
           total_units: totalUnits,
@@ -740,6 +961,7 @@ studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/past
         };
   
         res.status(200).json({
+          has_schedule: true,
           message: 'Study schedule retrieved successfully',
           summary: scheduleSummary,
           schedule,
@@ -749,8 +971,7 @@ studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/past
         console.error('Error fetching detailed schedule:', error);
         res.status(500).json({ error: 'Failed to fetch study schedule' });
       }
-  });
-  
+    });
   // Initialize schedule notifications with error handling
   const initializeScheduleNotifications = () => {
     try {
@@ -818,6 +1039,51 @@ studentRouter.delete('/api/student/study/schedule',
         res.status(500).json({ error: 'Failed to delete study schedule' });
       }
   });
+  studentRouter.get('/api/student/profile', auth, authorizeRole(['student']), async (req, res) => {
+    try {
+      const user = await User.findOne({
+      where: { 
+        user_id: req.user.user_id,
+        role: 'student'
+      },
+      attributes: 
+      ['first_name', 'last_name', 'email', 'level', 'xp', 'current_streak', 'highest_streak', 'total_active_days', 'role','daily_quest_status',
+        'department', 'course_of_study'
+  
+      ]
+    });
+    if (!user) {
+      return res.status(404).json({ error: 'Student profile not found' });
+    }
+    res.status(200).json({
+      message: 'Student profile retrieved successfully',
+      user
+    });
+  } catch (error) {
+    console.error('Error fetching student profile:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+  });
+  studentRouter.put('/api/student/profile/update', auth, authorizeRole(['student']), async (req, res) => {
+    try {
+      const { first_name, last_name, level, department, course_of_study } = req.body;
+  
+      await User.update(
+       { first_name, last_name, level, department, course_of_study },
+       { where: { user_id: req.user.user_id, role: 'student' } }
+      );
+  
+      res.status(200).json({
+         message: 'Profile updated successfully' 
+        });
+  
+    } catch (error) {
+      console.error('Error updating student profile:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+  
+  
 
 
   module.exports = {
