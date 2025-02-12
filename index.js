@@ -5,12 +5,12 @@ const sequelize = require('./config/database');
 const authRouter = require('./routes/auth');
 const courseRepRouter = require('./routes/course_representative');
 const {studentRouter} = require('./routes/student');
-
+const setupAssociations = require('./config/associations');
 // Import the initialization function
 const { initializeScheduleNotifications } = require('./routes/student');
 
 const app = express();
-
+setupAssociations();
 // Middleware
 app.use(express.json());
 app.use(cors());
