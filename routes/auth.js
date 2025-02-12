@@ -43,7 +43,7 @@ authRouter.post('/api/users/signup', async (req, res) => {
         // Generate verification code
         const verificationCode = Math.floor(10000 + Math.random() * 90000).toString();
         const verificationExpiry = new Date(Date.now() + 30 * 60 * 1000); 
-
+         console.log(`Verification code: ${verificationCode}`);
         // Hash the password
         const hashedPassword = await bcryptjs.hash(password, 10);
 
@@ -126,6 +126,44 @@ authRouter.post('/api/users/verify', async (req, res) => {
     }
 });
 
+authRouter.post('/api/users/resend-verification', async (req, res) => {
+    try {
+      const { email } = req.body;
+      const trimmedEmail = email.trim().toLowerCase();
+      
+      // Find the user
+      const user = await User.findOne({ where: { email: trimmedEmail } });
+      
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      
+      if (user.is_verified) {
+        return res.status(400).json({ error: 'User is already verified' });
+      }
+  
+      // Generate new verification code
+      const verificationCode = Math.floor(10000 + Math.random() * 90000).toString();
+      const verificationExpiry = new Date(Date.now() + 30 * 60 * 1000);
+  
+      // Update user with new verification code
+      await user.update({
+        verification_code: verificationCode,
+        verification_code_expires_at: verificationExpiry
+      });
+  
+      // Send new verification email
+      await sendVerificationEmail(trimmedEmail, verificationCode);
+  
+      res.status(200).json({
+        message: 'New verification code sent successfully'
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+  
 // Update signin route to check verification
 authRouter.post('/api/users/signin', async (req, res) => {
     try {
