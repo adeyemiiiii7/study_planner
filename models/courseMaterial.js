@@ -1,7 +1,7 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-const CourseMaterial = sequelize.define('Slide', {
+const CourseMaterial = sequelize.define('CourseMaterial', {
    material_id: {
     type: DataTypes.UUID,
     defaultValue: DataTypes.UUIDV4,
