@@ -5,9 +5,11 @@ const sequelize = require('./config/database');
 const authRouter = require('./routes/auth');
 const courseRepRouter = require('./routes/course_representative');
 const {studentRouter} = require('./routes/student');
+const questRouter = require('./routes/questRoute');
 const setupAssociations = require('./config/associations');
 // Import the initialization function
 const { initializeScheduleNotifications } = require('./routes/student');
+const wellnessRouter = require('./routes/wellness');
 
 const app = express();
 setupAssociations();
@@ -20,6 +22,8 @@ app.use(morgan('dev'));
 app.use(authRouter);
 app.use(courseRepRouter);
 app.use(studentRouter);
+app.use(questRouter);
+app.use(wellnessRouter);
 
 // Database initialization
 sequelize
