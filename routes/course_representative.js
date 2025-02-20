@@ -81,7 +81,7 @@ const groq = new Groq({
   async function generateQuestionsWithGroq(materialContent, materialNumber) {
     const prompt = `IMPORTANT: Provide ONLY a valid JSON array. Do not include any explanatory text before or after.
   
-  Generate 25 multiple choice questions based on the following structured slide content.
+  Generate 25 multiple choice questions based on the following structured material content.
   Ensure questions cover different aspects and difficulty levels.
   
   Main Concepts: ${materialContent.split('Main Concepts:')[1]?.split('Key Definitions:')[0] || ''}
@@ -100,7 +100,7 @@ const groq = new Groq({
     }
   ]
   
-  Slide ${materialNumber} content: ${materialContent}
+  Course Material ${materialNumber} content: ${materialContent}
   
   JSON ARRAY:`;
   
@@ -147,151 +147,142 @@ const groq = new Groq({
       throw new Error(`Failed to generate questions: ${error.message}`);
     }
   }
-  // Get questions endpoint with slide-specific filtering and improved error handling
-courseRepRouter.get('/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/slides/:slideId/questions',
-    auth,
-    authorizeRole(['course_rep']),
-    async (req, res) => {
-      try {
-        const { classroomId, courseSectionId, slideId } = req.params;
-  
-        // Validate slide existence first
-        const courseMaterial = await CourseMaterial.findOne({
-          where: {
-            material_id:  materialId,
-            course_section_id: courseSectionId,
-            classroom_id: classroomId
-          }
-        });
-  
-        if (!courseMaterial) {
-          return res.status(404).json({ 
-            error: 'Course Material not found or unauthorized access',
-            questions: [] 
-          });
+// Get questions endpoint
+courseRepRouter.get('/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/coursematerial/:materialId/questions',
+  auth,
+  authorizeRole(['course_rep']),
+  async (req, res) => {
+    try {
+      const { classroomId, courseSectionId, materialId } = req.params;
+
+      const courseMaterial = await CourseMaterial.findOne({
+        where: {
+          material_id: materialId,
+          course_section_id: courseSectionId,
+          classroom_id: classroomId
         }
-  
-        // Fetch questions for the specific slide
-        const questions = await Question.findAll({
-          where: {
-            material_id:  materialId,
-            course_section_id: courseSectionId,
-            classroom_id: classroomId
-          },
-          order: [['material_number', 'ASC']],
-          attributes: [
-            'question_id', 
-            'question_text', 
-            'options', 
-            'correct_answer', 
-            'question_type', 
-            'difficulty_level',
-            'material_number'
-          ]
+      });
+
+      if (!courseMaterial) {
+        return res.status(404).json({ 
+          error: 'Course Material not found or unauthorized access',
+          questions: [] 
         });
-  
-        res.status(200).json({
-          message: 'Questions retrieved successfully',
-          questions: questions.length > 0 ? questions : [],
-          courseMaterial: {
-            material_id:  materialId,
-            material_name: courseMaterial.material_name,
-            material_number: courseMaterial.material_number
-          }
-        });
-      } catch (error) {
-        console.error('Error fetching questions:', error);
-        res.status(500).json({ 
-          error: 'Failed to fetch questions',
+      }
+
+      const questions = await Question.findAll({
+        where: {
+          material_id: materialId,
+          course_section_id: courseSectionId,
+          classroom_id: classroomId
+        },
+        order: [['material_number', 'ASC']],
+        attributes: [
+          'question_id', 
+          'question_text', 
+          'options', 
+          'correct_answer', 
+          'question_type', 
+          'difficulty_level',
+          'material_number'
+        ]
+      });
+
+      res.status(200).json({
+        message: 'Questions retrieved successfully',
+        questions: questions.length > 0 ? questions : [],
+        courseMaterial: {
+          material_id: materialId,
+          material_name: courseMaterial.material_name,
+          material_number: courseMaterial.material_number
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching questions:', error);
+      res.status(500).json({ 
+        error: 'Failed to fetch questions',
+        questions: []
+      });
+    }
+});
+
+// Generate questions endpoint
+courseRepRouter.post('/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/coursematerial/:materialId/generate-questions',
+  auth,
+  authorizeRole(['course_rep']),
+  async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+      const { classroomId, courseSectionId, materialId } = req.params;
+      const { materialContent, materialNumber } = req.body;
+      
+      if (!materialContent) {
+        return res.status(400).json({ 
+          error: 'Material content is required for generating questions',
           questions: []
         });
       }
-  });
-  
-  // Updated generate questions endpoint with more robust error handling
-  courseRepRouter.post('/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/slides/:slideId/generate-questions',
-    auth,
-    authorizeRole(['course_rep']),
-    async (req, res) => {
-      const transaction = await sequelize.transaction();
-      try {
-        const { classroomId, courseSectionId, materialId} = req.params;
-        const {materialContent, materialNumber } = req.body;
-        
-        // Validate inputs
-        if (!slideContent) {
-          return res.status(400).json({ 
-            error: 'Slide content is required for generating questions',
-            questions: []
-          });
-        }
-  
-        // Validate slide existence and ownership
-        const courseMaterial = await CourseMaterial.findOne({
-          where: {
-            material_id: materialId,
-            course_section_id: courseSectionId,
-            classroom_id: classroomId
-          },
-          transaction
-        });
-  
-        if (!courseMaterial) {
-          await transaction.rollback();
-          return res.status(404).json({ 
-            error: 'Course Material not found or unauthorized access',
-            questions: []
-          });
-        }
-  
-        // First, delete any existing questions for this slide
-        await Question.destroy({
-          where: {
-            material_id: materialId,
-            course_section_id: courseSectionId,
-            classroom_id: classroomId
-          },
-          transaction
-        });
-  
-        // Generate new questions
-        const generatedQuestions = await generateQuestionsWithGroq(slideContent, slideNumber);
-        
-        // Save generated questions
-        const savedQuestions = await Promise.all(
-          generatedQuestions.map(q => Question.create({
-            ...q,
-            material_id: courseMaterial.material_id,
-            course_section_id: courseSectionId,
-            classroom_id: classroomId
-          }, { transaction }))
-        );
-  
-        // Commit transaction
-        await transaction.commit();
-  
-        res.status(200).json({
-          message: 'Questions generated successfully',
-          questions: savedQuestions,
-          courseMaterial: {
-            material_id: courseMaterial.material_id,
-            material_name: courseMaterial.slide_name,
-            material_number: courseMaterial.slide_number
-          }
-        });
-  
-      } catch (error) {
-        // Rollback transaction in case of error
-        if (transaction) await transaction.rollback();
-        
-        console.error('Error generating questions:', error);
-        res.status(500).json({ 
-          error: 'Failed to generate questions',
-          details: error.message,
+
+      const courseMaterial = await CourseMaterial.findOne({
+        where: {
+          material_id: materialId,
+          course_section_id: courseSectionId,
+          classroom_id: classroomId
+        },
+        transaction
+      });
+
+      if (!courseMaterial) {
+        await transaction.rollback();
+        return res.status(404).json({ 
+          error: 'Course Material not found or unauthorized access',
           questions: []
         });
       }
-  });
+
+      await Question.destroy({
+        where: {
+          material_id: materialId,
+          course_section_id: courseSectionId,
+          classroom_id: classroomId
+        },
+        transaction
+      });
+
+      const generatedQuestions = await generateQuestionsWithGroq(materialContent, materialNumber);
+      
+      const savedQuestions = await Promise.all(
+        generatedQuestions.map(q => Question.create({
+          ...q,
+          material_id: courseMaterial.material_id,
+          course_section_id: courseSectionId,
+          classroom_id: classroomId
+        }, { transaction }))
+      );
+
+      await transaction.commit();
+
+      res.status(200).json({
+        message: 'Questions generated successfully',
+        questions: savedQuestions,
+        courseMaterial: {
+          material_id: courseMaterial.material_id,
+          material_name: courseMaterial.material_name,
+          material_number: courseMaterial.material_number
+        }
+      });
+
+    } catch (error) {
+      if (transaction) await transaction.rollback();
+      
+      console.error('Error generating questions:', error);
+      res.status(500).json({ 
+        error: 'Failed to generate questions',
+        details: error.message,
+        questions: []
+      });
+    }
+});
   
   // Edit question endpoint with additional validation
   courseRepRouter.put('/api/course-rep/classrooms/:classroomId/questions/:questionId',
@@ -436,7 +427,7 @@ courseRepRouter.post('/api/course-rep/classrooms/create', auth, authorizeRole(['
           pass: 'kugi fihw cugc trye'
         },
         tls: {
-          rejectUnauthorized: false // Allow self-signed certificates
+          rejectUnauthorized: false 
         }
       });
       const mailOptions = {
@@ -813,75 +804,106 @@ courseRepRouter.get('/api/course-rep/classrooms/:classroomId/course-sections/:co
   });
   
 
-// Route to upload a course material to a course section
-courseRepRouter.post('/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/course-materials/upload', 
-    auth, authorizeRole(['course_rep']), upload.single('file'), async (req, res) => {
+// Upload Course Material
+courseRepRouter.post(
+  '/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/course-materials/upload',
+  auth,
+  authorizeRole(['course_rep']),
+  upload.single('file'),
+  async (req, res) => {
     try {
       const { classroomId, courseSectionId } = req.params;
       const { material_name, material_number } = req.body;
       const file_url = req.file.path;
-  
+
       const courseSection = await CourseSection.findOne({
         where: {
           course_section_id: courseSectionId,
           classroom_id: classroomId,
         },
       });
-  
+
       if (!courseSection) {
         return res.status(400).json({ error: 'Course section not found' });
       }
-  
+
       if (!material_number || isNaN(material_number)) {
-        return res.status(400).json({ error: 'Invalid material number. Please provide a valid number.' });
+        return res.status(400).json({ 
+          error: 'Invalid material number. Please provide a valid number.' 
+        });
       }
-  
+
       const existingMaterial = await CourseMaterial.findOne({
         where: {
           course_section_id: courseSection.course_section_id,
-         material_number: parseInt(material_number),
+          material_number: parseInt(material_number),
         },
       });
+
       if (existingMaterial) {
-        return res.status(400).json({ error: 'Material Number already exists in this course section. Please use a different number.' });
+        return res.status(400).json({ 
+          error: 'Material Number already exists in this course section. Please use a different number.' 
+        });
       }
-  
+
       const newCourseMaterial = await CourseMaterial.create({
-       material_name,
+        material_name,
         file_name: req.file.originalname,
         file_url,
         material_number: parseInt(material_number),
         course_section_id: courseSection.course_section_id,
         classroom_id: classroomId,
       });
-  
-      res.json({ message: 'Course Material uploaded successfully', CourseMaterial: newCourseMaterial });
+
+      res.json({ 
+        message: 'Course Material uploaded successfully', 
+        CourseMaterial: newCourseMaterial 
+      });
     } catch (error) {
       console.error('Error uploading Course Material:', error);
       res.status(500).json({ error: 'Failed to upload Course Material' });
     }
-  });
-  //Fetch Slides by Sections
-courseRepRouter.get('/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/course-materals', 
-    auth, authorizeRole(['course_rep']), async (req, res) => {
+  }
+);
+
+// Fetch Course Materials
+courseRepRouter.get(
+  '/api/course-rep/classrooms/:classroomId/course-sections/:courseSectionId/course-materials',
+  auth,
+  authorizeRole(['course_rep']),
+  async (req, res) => {
     const { classroomId, courseSectionId } = req.params;
     try {
       const courseMaterials = await CourseMaterial.findAll({
-        where: { course_section_id: courseSectionId, classroom_id: classroomId },
-        attributes: ['material_id', 'material_name', 'file_name', 'file_url', 'material_number'],
+        where: { 
+          course_section_id: courseSectionId, 
+          classroom_id: classroomId 
+        },
+        attributes: [
+          'material_id',
+          'material_name',
+          'file_name',
+          'file_url',
+          'material_number'
+        ],
+        order: [['material_number', 'ASC']], // Sort by material number
       });
-  
+
       res.status(200).json({
         message: 'Course Materials fetched successfully',
-       courseMaterials
+        courseMaterials
       });
     } catch (error) {
       console.error('Error Fetching Course Materials:', error);
-      res.status(500).json({ error: 'An error occurred while fetching Course Materials' });
+      res.status(500).json({ 
+        error: 'An error occurred while fetching Course Materials' 
+      });
     }
-  });
+  }
+);
+
   // Delete Course Materials
-courseRepRouter.delete('/api/course-rep/classrooms/:classroomId/slides/:slideId',
+courseRepRouter.delete('/api/course-rep/classrooms/:classroomId/course-materials/:materialId',
     auth,
     authorizeRole(['course_rep']),
     async (req, res) => {
@@ -901,7 +923,7 @@ courseRepRouter.delete('/api/course-rep/classrooms/:classroomId/slides/:slideId'
   
        // First, delete associated questions
        await Question.destroy({
-         where: { slide_id: slide.slide_id },
+         where: {  material_id: courseMaterials.material_id},
          transaction: t
        });
   

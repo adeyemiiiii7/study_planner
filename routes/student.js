@@ -15,186 +15,320 @@ const UserCourse = require('../models/userCourse');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const { Op } = require('sequelize');
-const SlideQuestionAttempt = require('../models/slideQuestionAttempt');
+const MaterialQuestionAttempt = require('../models/materialQuestionAttempt');
 const Question = require('../models/question');
 
-studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/slides/:slideId/test',
-    auth, 
-    authorizeRole(['student', 'course_rep']), 
-    async (req, res) => {
-      try {
-        const { classroomId, sectionId, materialId } = req.params;
-        
-        // Get all questions for the slide - including pending_review for testing
-        const allQuestions = await Question.findAll({
-          where: {
-            material_id: materialId,
-            course_section_id: sectionId,
-            classroom_id: classroomId,
-            status: {
-              [Op.in]: ['approved', 'pending_review'] 
-            }
-          }
-        });
-  
-        console.log('Questions found:', {
-          total: allQuestions.length,
-          byStatus: allQuestions.reduce((acc, q) => {
-            acc[q.status] = (acc[q.status] || 0) + 1;
-            return acc;
-          }, {})
-        });
-  
-        if (allQuestions.length === 0) {
-          return res.status(200).json({
-            message: 'No questions available for this slide',
-            debug: {
-              queryParams: {
-                material_id: materialId,
-                course_section_id: sectionId,
-                classroom_id: classroomId
-              }
-            }
-          });
-        }
-       // Backend: Shuffling logic (already correct)
-  const shuffledQuestions = allQuestions.map(q => {
-    const shuffledOptions = q.options
-      .map((value, originalIndex) => ({ 
-        value, 
-        originalIndex,
-        sort: Math.random() 
-      }))
-      .sort((a, b) => a.sort - b.sort);
-  
-    const optionMapping = shuffledOptions.map(opt => opt.originalIndex);
-  
-    return {
-      question_id: q.question_id,
-      question_text: q.question_text,
-      options: shuffledOptions.map(opt => opt.value),
-      correct_answer: q.correct_answer,
-      option_mapping: optionMapping 
-    };
-  })
-        .sort(() => 0.5 - Math.random())
-        .slice(0, 25);
-  
-        res.status(200).json({
-          message: 'Test questions retrieved successfully',
-          questions: shuffledQuestions,
-          debug: {
-            totalQuestions: allQuestions.length,
-            returnedQuestions: shuffledQuestions.length
-          }
-        });
-      } catch (error) {
-        console.error('Error fetching test questions:', error);
-        res.status(500).json({ 
-          error: 'Internal server error',
-          debug: {
-            message: error.message
-          }
-        });
-      }
-  });
-  studentRouter.post('/api/student/classrooms/:classroomId/sections/:sectionId/slides/:slideId/submit-test',
-    auth, 
-    authorizeRole(['student', 'course_rep']), 
-    async (req, res) => {
-      try {
-        const { classroomId, sectionId, materialId } = req.params;
-        const { userAnswers } = req.body;
-  
-        // Validate userAnswers
-        if (!Array.isArray(userAnswers) || userAnswers.length === 0) {
-          return res.status(400).json({ error: 'Invalid user answers format' });
-        }
-  
-        // Verify classroom membership for students
-        if (req.user.role === 'student') {
-          const classroomStudent = await ClassroomStudent.findOne({
-            where: { 
-              student_id: req.user.user_id, 
-              classroom_id: classroomId 
-            }
-          });
-  
-          if (!classroomStudent) {
-            return res.status(403).json({ error: 'Not enrolled in this classroom' });
-          }
-        }
-  
-        // Fetch the full questions to verify answers
-        const questions = await Question.findAll({
-          where: {
-            material_id: materialId,
-            course_section_id: sectionId,
-            classroom_id: classroomId,
-            question_id: userAnswers.map(a => a.question_id)
-          }
-        });
-  
-        if (questions.length === 0) {
-          return res.status(404).json({ error: 'No questions found' });
-        }
-  
-      // Backend: Scoring logic (no changes needed)
-  const scoredAnswers = userAnswers.map(userAnswer => {
-    const question = questions.find(q => q.question_id === userAnswer.question_id);
-  
-    if (!question) {
-      console.error(`Question not found for ID: ${userAnswer.question_id}`);
-      return null;
-    }
-  
-    // The selected_option is already the original index
-    const originalOptionIndex = userAnswer.selected_option;
-  
-    // Validate that both the answer and correct_answer exist
-    const isCorrect = question.correct_answer !== undefined && 
-                     originalOptionIndex !== undefined && 
-                     question.correct_answer === originalOptionIndex;
-  
-    return {
-      question_id: userAnswer.question_id,
-      question_text: question.question_text,
-      user_selected_option: originalOptionIndex, // Original index
-      correct_answer: question.correct_answer,
-      correct_option: question.options[question.correct_answer],
-      is_correct: isCorrect,
-      options: question.options
-    };
-  }).filter(answer => answer !== null);
-  
-        if (scoredAnswers.length === 0) {
-          return res.status(400).json({ error: 'No valid answers could be processed' });
-        }
-  
-        const score = (scoredAnswers.filter(a => a.is_correct).length / scoredAnswers.length) * 100;
-  
-        // Record the attempt
-        await SlideQuestionAttempt.create({
-          user_id: req.user.user_id,
-            material_id: materialId,
-          classroom_id: classroomId,
+studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/materials/:materialId/test',
+  auth, 
+  authorizeRole(['student', 'course_rep']), 
+  async (req, res) => {
+    try {
+      const { classroomId, sectionId, materialId } = req.params;
+      
+      // Get all questions for the material
+      const allQuestions = await Question.findAll({
+        where: {
+          material_id: materialId,
           course_section_id: sectionId,
-          questions_attempted: scoredAnswers,
-          score
-        });
-  
-        res.status(200).json({
-          message: 'Test submitted successfully',
-          score,
-          attempts: scoredAnswers
-        });
-      } catch (error) {
-        console.error('Error submitting test:', error);
-        res.status(500).json({ 
-          error: 'Internal server error',
+          classroom_id: classroomId,
+          status: {
+            [Op.in]: ['approved', 'pending_review'] 
+          }
+        }
+      });
+
+      console.log('Questions found:', {
+        total: allQuestions.length,
+        byStatus: allQuestions.reduce((acc, q) => {
+          acc[q.status] = (acc[q.status] || 0) + 1;
+          return acc;
+        }, {})
+      });
+
+      if (allQuestions.length === 0) {
+        return res.status(200).json({
+          message: 'No questions available for this material',
+          debug: {
+            queryParams: {
+              material_id: materialId,
+              course_section_id: sectionId,
+              classroom_id: classroomId
+            }
+          }
         });
       }
-  });
+
+      // Shuffling logic
+      const shuffledQuestions = allQuestions.map(q => {
+        const shuffledOptions = q.options
+          .map((value, originalIndex) => ({ 
+            value, 
+            originalIndex,
+            sort: Math.random() 
+          }))
+          .sort((a, b) => a.sort - b.sort);
+
+        const optionMapping = shuffledOptions.map(opt => opt.originalIndex);
+
+        return {
+          question_id: q.question_id,
+          question_text: q.question_text,
+          options: shuffledOptions.map(opt => opt.value),
+          correct_answer: q.correct_answer,
+          option_mapping: optionMapping 
+        };
+      })
+      .sort(() => 0.5 - Math.random())
+      .slice(0, 25);
+
+      res.status(200).json({
+        message: 'Test questions retrieved successfully',
+        questions: shuffledQuestions,
+        debug: {
+          totalQuestions: allQuestions.length,
+          returnedQuestions: shuffledQuestions.length
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching test questions:', error);
+      res.status(500).json({ 
+        error: 'Internal server error',
+        debug: {
+          message: error.message
+        }
+      });
+    }
+});
+
+studentRouter.post('/api/student/classrooms/:classroomId/sections/:sectionId/materials/:materialId/submit-test',
+  auth, 
+  authorizeRole(['student', 'course_rep']), 
+  async (req, res) => {
+    try {
+      const { classroomId, sectionId, materialId } = req.params;
+      const { userAnswers } = req.body;
+      const userId = req.user.user_id;
+
+      // Validate userAnswers
+      if (!Array.isArray(userAnswers) || userAnswers.length === 0) {
+        return res.status(400).json({ error: 'Invalid user answers format' });
+      }
+
+      // Verify classroom membership for students
+      if (req.user.role === 'student') {
+        const classroomStudent = await ClassroomStudent.findOne({
+          where: { 
+            student_id: userId, 
+            classroom_id: classroomId 
+          }
+        });
+
+        if (!classroomStudent) {
+          return res.status(403).json({ error: 'Not enrolled in this classroom' });
+        }
+      }
+
+      // Fetch the full questions to verify answers
+      const questions = await Question.findAll({
+        where: {
+          material_id: materialId,
+          course_section_id: sectionId,
+          classroom_id: classroomId,
+          question_id: userAnswers.map(a => a.question_id)
+        }
+      });
+
+      if (questions.length === 0) {
+        return res.status(404).json({ error: 'No questions found' });
+      }
+
+      // Scoring logic
+      const scoredAnswers = userAnswers.map(userAnswer => {
+        const question = questions.find(q => q.question_id === userAnswer.question_id);
+
+        if (!question) {
+          console.error(`Question not found for ID: ${userAnswer.question_id}`);
+          return null;
+        }
+
+        const originalOptionIndex = userAnswer.selected_option;
+
+        const isCorrect = question.correct_answer !== undefined && 
+                         originalOptionIndex !== undefined && 
+                         question.correct_answer === originalOptionIndex;
+
+        return {
+          question_id: userAnswer.question_id,
+          question_text: question.question_text,
+          user_selected_option: originalOptionIndex,
+          correct_answer: question.correct_answer,
+          correct_option: question.options[question.correct_answer],
+          is_correct: isCorrect,
+          options: question.options
+        };
+      }).filter(answer => answer !== null);
+
+      if (scoredAnswers.length === 0) {
+        return res.status(400).json({ error: 'No valid answers could be processed' });
+      }
+
+      const score = (scoredAnswers.filter(a => a.is_correct).length / scoredAnswers.length) * 100;
+
+      // Record the attempt
+      await MaterialQuestionAttempt.create({
+        user_id: userId,
+        material_id: materialId,
+        classroom_id: classroomId,
+        course_section_id: sectionId,
+        questions_attempted: scoredAnswers,
+        score
+      });
+
+      // Get performance analysis including past attempts
+      const performanceAnalysis = await MaterialQuestionAttempt.getPerformanceAnalysis(userId, materialId);
+
+      // Prepare personalized feedback based on performance
+      let feedbackMessage = performanceAnalysis.message;
+      
+      // Add more detailed feedback for improvement if needed
+      if (performanceAnalysis.improvementNeeded) {
+        // Identify weak areas
+        const weakTopics = scoredAnswers
+          .filter(a => !a.is_correct)
+          .map(a => a.question_text)
+          .slice(0, 3); // Get up to 3 topics to focus on
+          
+        feedbackMessage += " Focus on these areas: " + 
+          (weakTopics.length > 0 ? weakTopics.join(", ") : "Review all topics in this material");
+      }
+
+      res.status(200).json({
+        message: 'Test submitted successfully',
+        currentScore: score,
+        performanceHistory: {
+          attempts: performanceAnalysis.attempts.length,
+          averageScore: performanceAnalysis.averageScore.toFixed(1),
+          highestScore: performanceAnalysis.highestScore,
+          recentScores: performanceAnalysis.attempts.map(a => ({
+            score: a.score,
+            date: a.completed_at
+          })).slice(0, 5)
+        },
+        feedback: feedbackMessage,
+        scoredAnswers
+      });
+    } catch (error) {
+      console.error('Error submitting test:', error);
+      res.status(500).json({ 
+        error: 'Internal server error',
+      });
+    }
+});
+studentRouter.get('/api/student/classrooms/:classroomId/materials/:materialId/progress',
+  auth, 
+  authorizeRole(['student', 'course_rep']), 
+  async (req, res) => {
+    try {
+      const { classroomId, materialId } = req.params;
+      const userId = req.user.user_id;
+
+      // Verify classroom enrollment
+      if (req.user.role === 'student') {
+        const enrollment = await ClassroomStudent.findOne({
+          where: { 
+            student_id: userId, 
+            classroom_id: classroomId 
+          }
+        });
+
+        if (!enrollment) {
+          return res.status(403).json({ error: 'Not enrolled in this classroom' });
+        }
+      }
+
+      // Get material details to provide better context
+      const material = await CourseMaterial.findOne({
+        where: {
+          material_id: materialId,
+          classroom_id: classroomId
+        }
+      });
+
+      if (!material) {
+        return res.status(404).json({ error: 'Course material not found' });
+      }
+
+      // Get progress analysis
+      const progressData = await MaterialQuestionAttempt.getPerformanceAnalysis(userId, materialId);
+      
+      // Get last 5 attempts with details
+      const lastAttempts = await MaterialQuestionAttempt.getLastAttempts(userId, materialId);
+      
+      // Calculate improvement trend
+      let trend = "Not enough data";
+      if (lastAttempts.length >= 2) {
+        const recentScores = lastAttempts.map(attempt => attempt.score).reverse();
+        const firstScore = recentScores[0];
+        const lastScore = recentScores[recentScores.length - 1];
+        
+        if (lastScore > firstScore) {
+          trend = "Improving";
+        } else if (lastScore < firstScore) {
+          trend = "Declining";
+        } else {
+          trend = "Stable";
+        }
+      }
+      
+      // Generate study recommendations
+      let studyRecommendation = "";
+      if (progressData.improvementNeeded) {
+        studyRecommendation = "Based on your performance, we recommend reviewing the following topics:";
+        
+        // Analyze question patterns from the most recent attempt
+        if (lastAttempts.length > 0) {
+          const latestAttempt = lastAttempts[0];
+          const missedQuestions = latestAttempt.questions_attempted
+            .filter(q => !q.is_correct)
+            .slice(0, 3);
+            
+          if (missedQuestions.length > 0) {
+            missedQuestions.forEach((q, idx) => {
+              studyRecommendation += `\n${idx + 1}. ${q.question_text}`;
+            });
+          } else {
+            studyRecommendation += " Review all material content thoroughly.";
+          }
+        }
+      } else if (progressData.averageScore >= 80) {
+        studyRecommendation = "Great work! You're showing strong understanding of this material. Consider exploring advanced topics.";
+      } else {
+        studyRecommendation = "You're making good progress. Continue practice to reinforce your understanding.";
+      }
+
+      res.status(200).json({
+        materialName: material.title,
+        progressSummary: {
+          attemptCount: lastAttempts.length,
+          lastFiveScores: lastAttempts.map(a => ({
+            score: a.score.toFixed(1),
+            date: a.completed_at,
+            passingStatus: a.score >= 60 ? "Pass" : "Needs Improvement"
+          })),
+          averageScore: progressData.averageScore.toFixed(1),
+          highestScore: progressData.highestScore.toFixed(1),
+          lowestScore: progressData.lowestScore.toFixed(1),
+          performanceTrend: trend
+        },
+        needsImprovement: progressData.improvementNeeded,
+        studyRecommendation,
+        performanceMessage: progressData.message
+      });
+    } catch (error) {
+      console.error('Error fetching progress data:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+});
 // Join a classroom
 studentRouter.post('/api/student/classrooms/join', 
     auth, 
@@ -397,7 +531,7 @@ studentRouter.get('/api/student/classrooms/:classroomId/sections', auth, authori
   });
   
 // Get Course Materials in a course section
-studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/slides', 
+studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/materials', 
     auth, authorizeRole(['student']), async (req, res) => {
     try {
       const studentClassroom = await ClassroomStudent.findOne({
@@ -420,7 +554,7 @@ studentRouter.get('/api/student/classrooms/:classroomId/sections/:sectionId/slid
   
       res.status(200).json({
         message: 'Course Material retrieved successfully',
-        slides
+        courseMaterials
       });
     } catch (error) {
       console.error('Error fetching course material:', error);
